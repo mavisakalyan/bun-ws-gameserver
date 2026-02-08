@@ -1,4 +1,4 @@
-import { decodeMessage, encodeMessage, ErrorCodes } from './protocol';
+import { decodeMessage, encodeMessage, ErrorCodes, PROTOCOL_VERSION } from './protocol';
 import { Room } from './room';
 import { RateLimiter } from './rate-limit';
 import { getHealthResponse, getMetricsResponse } from './health';
@@ -121,6 +121,20 @@ const server = Bun.serve<WSData>({
           message: 'Invalid message format',
         }));
         return;
+      }
+
+      // Handle hello (optional protocol version check)
+      if (decoded.type === 'hello') {
+        const clientVersion = decoded.protocolVersion;
+        if (typeof clientVersion === 'number' && clientVersion !== PROTOCOL_VERSION) {
+          ws.sendBinary(encodeMessage({
+            type: 'error',
+            code: ErrorCodes.BAD_PROTOCOL,
+            message: `Protocol mismatch. Server=${PROTOCOL_VERSION}, Client=${clientVersion}`,
+          }));
+          ws.close(1008, 'BAD_PROTOCOL');
+        }
+        return; // hello is consumed, not relayed
       }
 
       // Handle ping

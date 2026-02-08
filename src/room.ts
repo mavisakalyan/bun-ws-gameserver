@@ -1,5 +1,5 @@
 import type { ServerWebSocket } from 'bun';
-import { encodeMessage, type ServerMessage, ErrorCodes } from './protocol';
+import { encodeMessage, PROTOCOL_VERSION, type ServerMessage, ErrorCodes } from './protocol';
 import type { WSData } from './index';
 
 export interface Peer {
@@ -67,6 +67,7 @@ export class Room {
     // Send welcome to the new peer with list of existing peers
     ws.sendBinary(encodeMessage({
       type: 'welcome',
+      protocolVersion: PROTOCOL_VERSION,
       playerId: id,
       peers: existingPeerIds,
     }));

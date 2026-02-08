@@ -1,9 +1,14 @@
 import { encode, decode } from '@msgpack/msgpack';
 
+// ─── Protocol Version ─────────────────────────────────────────────
+
+export const PROTOCOL_VERSION = 1;
+
 // ─── Server → Client Messages ─────────────────────────────────────
 
 export type WelcomeMessage = {
   type: 'welcome';
+  protocolVersion: number;
   playerId: string;
   peers: string[];
 };
@@ -83,4 +88,5 @@ export const ErrorCodes = {
   RATE_LIMITED: 'RATE_LIMITED',
   ROOM_FULL: 'ROOM_FULL',
   INVALID_MESSAGE: 'INVALID_MESSAGE',
+  BAD_PROTOCOL: 'BAD_PROTOCOL',
 } as const;
