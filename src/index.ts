@@ -7,7 +7,6 @@ import { getHealthResponse, getMetricsResponse } from './health';
 
 const PORT = Number(process.env.PORT) || 8080;
 const ALLOWED_ORIGINS = (process.env.ALLOWED_ORIGINS || '*').split(',').map(s => s.trim());
-const SNAPSHOT_HZ = Number(process.env.SNAPSHOT_HZ) || 20;
 const KEEPALIVE_MS = Number(process.env.KEEPALIVE_MS) || 30000;
 const MAX_MESSAGES_PER_SECOND = Number(process.env.MAX_MESSAGES_PER_SECOND) || 60;
 const MAX_PLAYERS_PER_ROOM = Number(process.env.MAX_PLAYERS_PER_ROOM) || 50;
@@ -21,13 +20,12 @@ const rateLimiter = new RateLimiter(MAX_MESSAGES_PER_SECOND);
 export interface WSData {
   clientId: string;
   roomId: string;
-  joined: boolean;
 }
 
 function getOrCreateRoom(roomId: string): Room {
   let room = rooms.get(roomId);
   if (!room) {
-    room = new Room(roomId, MAX_PLAYERS_PER_ROOM, SNAPSHOT_HZ);
+    room = new Room(roomId, MAX_PLAYERS_PER_ROOM);
     rooms.set(roomId, room);
   }
   return room;
@@ -65,7 +63,7 @@ const server = Bun.serve<WSData>({
       const clientId = crypto.randomUUID();
 
       const upgraded = server.upgrade(req, {
-        data: { clientId, roomId, joined: false } satisfies WSData,
+        data: { clientId, roomId } satisfies WSData,
       });
 
       if (!upgraded) {
@@ -88,7 +86,13 @@ const server = Bun.serve<WSData>({
     sendPings: true,
 
     open(ws) {
-      // Connection opened — waiting for "join" message
+      // Auto-join room on connect
+      const { clientId, roomId } = ws.data;
+      const room = getOrCreateRoom(roomId);
+      const joined = room.join(clientId, ws);
+      if (!joined) {
+        ws.close(1013, 'Room full');
+      }
     },
 
     message(ws, message) {
@@ -98,7 +102,8 @@ const server = Bun.serve<WSData>({
       if (!rateLimiter.allow(clientId)) {
         ws.sendBinary(encodeMessage({
           type: 'error',
-          payload: { code: ErrorCodes.RATE_LIMITED, message: 'Rate limited' },
+          code: ErrorCodes.RATE_LIMITED,
+          message: 'Rate limited',
         }));
         return;
       }
@@ -112,41 +117,26 @@ const server = Bun.serve<WSData>({
       if (!decoded) {
         ws.sendBinary(encodeMessage({
           type: 'error',
-          payload: { code: ErrorCodes.INVALID_MESSAGE, message: 'Invalid message format' },
+          code: ErrorCodes.INVALID_MESSAGE,
+          message: 'Invalid message format',
         }));
         return;
       }
 
-      const room = getOrCreateRoom(roomId);
+      // Handle ping
+      if (decoded.type === 'ping' && typeof decoded.nonce === 'string') {
+        ws.sendBinary(encodeMessage({
+          type: 'pong',
+          nonce: decoded.nonce,
+          serverTime: Date.now(),
+        }));
+        return;
+      }
 
-      switch (decoded.type) {
-        case 'join': {
-          if (ws.data.joined) break;
-          const displayName = (decoded.payload.displayName || 'Anonymous').slice(0, 32);
-          const success = room.join(clientId, ws, displayName);
-          if (success) {
-            ws.data.joined = true;
-          }
-          break;
-        }
-
-        case 'state': {
-          if (!ws.data.joined) {
-            ws.sendBinary(encodeMessage({
-              type: 'error',
-              payload: { code: ErrorCodes.NOT_JOINED, message: 'Send a "join" message first' },
-            }));
-            break;
-          }
-          room.updatePlayerState(clientId, decoded.payload);
-          break;
-        }
-
-        case 'chat': {
-          if (!ws.data.joined) break;
-          room.chat(clientId, decoded.payload.message);
-          break;
-        }
+      // Everything else is game data — relay to peers
+      const room = rooms.get(roomId);
+      if (room) {
+        room.relay(clientId, decoded);
       }
     },
 
@@ -167,6 +157,14 @@ const server = Bun.serve<WSData>({
   },
 });
 
+// ─── Periodic metrics update ─────────────────────────────────────
+
+setInterval(() => {
+  for (const room of rooms.values()) {
+    room.updateMetrics();
+  }
+}, 1000);
+
 // ─── Rate limiter cleanup ────────────────────────────────────────
 
 setInterval(() => {
@@ -179,4 +177,4 @@ console.log(`[bun-ws-gameserver] Listening on port ${server.port}`);
 console.log(`[bun-ws-gameserver] WebSocket endpoint: ws://localhost:${server.port}/ws/:roomId`);
 console.log(`[bun-ws-gameserver] Health: http://localhost:${server.port}/health`);
 console.log(`[bun-ws-gameserver] Metrics: http://localhost:${server.port}/metrics`);
-console.log(`[bun-ws-gameserver] Config: ${SNAPSHOT_HZ}Hz tick, ${MAX_PLAYERS_PER_ROOM} max/room, ${MAX_MESSAGES_PER_SECOND} msg/s limit`);
+console.log(`[bun-ws-gameserver] Config: ${MAX_PLAYERS_PER_ROOM} max/room, ${MAX_MESSAGES_PER_SECOND} msg/s limit`);

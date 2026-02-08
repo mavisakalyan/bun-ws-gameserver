@@ -1,6 +1,6 @@
 # bun-ws-gameserver
 
-Production-grade Bun-native WebSocket game server with room-based architecture, binary protocol (msgpack), server-authoritative tick loop, and per-client rate limiting. 5-8x faster than Node.js `ws` — same protocol, same clients.
+Protocol-agnostic Bun-native WebSocket relay server with room-based architecture, binary protocol (msgpack), and per-client rate limiting. 5-8x faster than Node.js `ws` — same protocol, same clients.
 
 [![Deploy on Alternate Futures](https://app.alternatefutures.ai/badge/deploy.svg)](https://app.alternatefutures.ai/deploy/bun-ws-gameserver)
 
@@ -10,9 +10,9 @@ Production-grade Bun-native WebSocket game server with room-based architecture, 
 
 - **Bun-native WebSocket** — Uses `Bun.serve()` built-in WebSocket (5-8x faster than Node.js `ws`)
 - **Room-based architecture** — `/ws/:roomId` with auto-created rooms and configurable player caps
+- **Protocol-agnostic relay** — Server relays any msgpack message between peers without inspecting payloads
 - **Binary protocol (msgpack)** — ~40% smaller payloads than JSON
-- **Server-authoritative tick loop** — Configurable Hz for snapshot broadcasting
-- **Player state sync** — Position, rotation, action, and timestamp per player
+- **Instant relay** — Messages forwarded immediately to peers (no server-side batching)
 - **Bun pub/sub** — Built-in topic-based broadcasting for efficient room messages
 - **Zero-allocation per-connection state** — `ws.data` pattern for per-client metadata
 - **Per-client rate limiting** — Sliding window algorithm
@@ -51,31 +51,55 @@ docker run -p 8080:8080 bun-ws-gameserver
 |----------|---------|-------------|
 | `PORT` | `8080` | Server listen port |
 | `ALLOWED_ORIGINS` | `*` | Comma-separated allowed origins |
-| `SNAPSHOT_HZ` | `20` | Tick rate (snapshots/sec) |
 | `KEEPALIVE_MS` | `30000` | Idle timeout (ms) |
 | `MAX_MESSAGES_PER_SECOND` | `60` | Per-client rate limit |
 | `MAX_PLAYERS_PER_ROOM` | `50` | Room capacity |
 
 ## Protocol
 
-Both [`node-ws-gameserver`](https://github.com/alternatefutures/node-ws-gameserver) and `bun-ws-gameserver` use the same **msgpack binary protocol**, so clients are backend-agnostic.
+Both [`node-ws-gameserver`](https://github.com/mavisakalyan/node-ws-gameserver) and `bun-ws-gameserver` use the same **msgpack binary relay protocol**, so clients are backend-agnostic.
 
-### Client → Server
+The server is **protocol-agnostic** — it manages rooms and connections, but treats game data as opaque payloads. Any client that speaks msgpack can use it: multiplayer games, collaborative tools, IoT dashboards, chat apps, etc.
 
-```typescript
-{ type: "join",  payload: { displayName: string } }
-{ type: "state", payload: { position: {x,y,z}, rotation: {x,y,z,w}, action: string } }
-{ type: "chat",  payload: { message: string } }
-```
+### Connection Flow
+
+1. Client connects to `ws://host/ws/:roomId`
+2. Server auto-assigns a `playerId` and sends `welcome` with list of existing peers
+3. Client sends any msgpack messages — server wraps each in a `relay` envelope and forwards to all other peers
+4. When peers join/leave, server notifies all remaining peers
 
 ### Server → Client
 
 ```typescript
-{ type: "snapshot",      payload: { players: Record<id, PlayerState>, timestamp: number } }
-{ type: "player_joined", payload: { id: string, displayName: string } }
-{ type: "player_left",   payload: { id: string } }
-{ type: "chat",          payload: { id: string, message: string } }
-{ type: "error",         payload: { code: string, message: string } }
+// Sent on connect
+{ type: "welcome", playerId: string, peers: string[] }
+
+// Peer lifecycle
+{ type: "peer_joined", peerId: string }
+{ type: "peer_left",   peerId: string }
+
+// Relayed game data from another peer (data is passed through untouched)
+{ type: "relay", from: string, data: any }
+
+// Keepalive response
+{ type: "pong", nonce: string, serverTime: number }
+
+// Errors (rate limit, room full, bad message)
+{ type: "error", code: string, message: string }
+```
+
+### Client → Server
+
+```typescript
+// Optional keepalive
+{ type: "ping", nonce: string }
+
+// ANYTHING ELSE is relayed to all other peers in the room.
+// The server does not inspect or validate your game data.
+// Examples:
+{ type: "position", x: 1.5, y: 0, z: -3.2 }
+{ type: "chat", text: "hello" }
+{ type: "snapshot", pos: [0, 1, 0], rotY: 3.14, locomotion: "run" }
 ```
 
 ### Example Client (browser)
@@ -86,28 +110,38 @@ import { encode, decode } from '@msgpack/msgpack';
 const ws = new WebSocket('ws://localhost:8080/ws/lobby');
 ws.binaryType = 'arraybuffer';
 
-ws.onopen = () => {
-  ws.send(encode({ type: 'join', payload: { displayName: 'Player1' } }));
-};
+let myId: string;
 
 ws.onmessage = (event) => {
   const msg = decode(new Uint8Array(event.data));
-  if (msg.type === 'snapshot') {
-    // Update game state with msg.payload.players
+
+  switch (msg.type) {
+    case 'welcome':
+      myId = msg.playerId;
+      console.log(`Joined as ${myId}, peers:`, msg.peers);
+      break;
+    case 'peer_joined':
+      console.log(`${msg.peerId} joined`);
+      break;
+    case 'peer_left':
+      console.log(`${msg.peerId} left`);
+      break;
+    case 'relay':
+      // msg.from = peer ID, msg.data = whatever they sent
+      handlePeerData(msg.from, msg.data);
+      break;
   }
 };
 
-// Send player state at 30fps
+// Send your game state (any shape you want)
 setInterval(() => {
   ws.send(encode({
-    type: 'state',
-    payload: {
-      position: { x: 0, y: 0, z: 0 },
-      rotation: { x: 0, y: 0, z: 0, w: 1 },
-      action: 'idle',
-    },
+    type: 'position',
+    x: Math.random() * 10,
+    y: 0,
+    z: Math.random() * 10,
   }));
-}, 33);
+}, 50);
 ```
 
 ## Why Bun?
@@ -126,7 +160,7 @@ Same protocol, same clients, same API — just faster.
 
 | Path | Method | Description |
 |------|--------|-------------|
-| `/ws/:roomId` | WS | WebSocket game connection (default room: "lobby") |
+| `/ws/:roomId` | WS | WebSocket connection (default room: "lobby") |
 | `/health` | GET | Health check — status, rooms, connections, uptime |
 | `/metrics` | GET | Detailed metrics — memory, messages/sec per room |
 

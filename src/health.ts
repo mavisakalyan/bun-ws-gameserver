@@ -10,7 +10,7 @@ export interface HealthInfo {
 
 export interface MetricsInfo {
   uptime: number;
-  rooms: Record<string, { players: number; messagesPerSecond: number; running: boolean }>;
+  rooms: Record<string, { players: number; messagesPerSecond: number }>;
   totalConnections: number;
   memory: {
     rss: number;
@@ -50,11 +50,10 @@ export function getMetricsResponse(rooms: Map<string, Room>): Response {
 
   for (const [id, room] of rooms) {
     totalConnections += room.playerCount;
-    roomMetrics[id] = {
-      players: room.playerCount,
-      messagesPerSecond: room.messagesPerSecond,
-      running: room.isRunning,
-    };
+      roomMetrics[id] = {
+        players: room.playerCount,
+        messagesPerSecond: room.messagesPerSecond,
+      };
   }
 
   const metrics: MetricsInfo = {
