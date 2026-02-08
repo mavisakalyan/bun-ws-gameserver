@@ -4,7 +4,7 @@ Protocol-agnostic Bun-native WebSocket relay server with room-based architecture
 
 [![Deploy on Alternate Futures](https://app.alternatefutures.ai/badge/deploy.svg)](https://app.alternatefutures.ai/deploy/bun-ws-gameserver)
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/SkArS3?referralCode=vwwMnH)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/bun-websocket-game-server)
 
 ## Features
 
