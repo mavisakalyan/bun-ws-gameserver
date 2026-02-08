@@ -4,7 +4,7 @@ Production-grade Bun-native WebSocket game server with room-based architecture, 
 
 [![Deploy on Alternate Futures](https://app.alternatefutures.ai/badge/deploy.svg)](https://app.alternatefutures.ai/deploy/bun-ws-gameserver)
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/YOUR_TEMPLATE_ID?referralCode=YOUR_CODE)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/SkArS3?referralCode=vwwMnH)
 
 ## Features
 
