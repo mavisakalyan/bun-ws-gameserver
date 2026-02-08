@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ws-gameserver demo</title>
+    <style>
+      :root { color-scheme: dark; }
+      body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background: #0b0f18; color: #e6e6e6; }
+      header { padding: 16px; border-bottom: 1px solid #1f2a44; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+      input, button { font: inherit; padding: 8px 10px; border-radius: 8px; border: 1px solid #2a3a63; background: #0f1729; color: #e6e6e6; }
+      input { min-width: 360px; }
+      button { cursor: pointer; }
+      button[disabled] { opacity: 0.6; cursor: not-allowed; }
+      main { display: grid; grid-template-rows: auto 1fr; height: calc(100vh - 66px); }
+      .row { padding: 12px 16px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; border-bottom: 1px solid #1f2a44; }
+      #log { padding: 16px; margin: 0; overflow: auto; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 12px; line-height: 1.4; white-space: pre-wrap; }
+      .pill { padding: 2px 8px; border-radius: 999px; border: 1px solid #2a3a63; background: #0f1729; }
+      a { color: #9fb6ff; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <strong>WebSocket relay demo</strong>
+      <span class="pill" id="status">disconnected</span>
+      <span class="pill" id="me">me: -</span>
+      <span class="pill" id="room">room: -</span>
+      <span style="opacity:.8">Open this page in two tabs to test relay.</span>
+    </header>
+
+    <main>
+      <div class="row">
+        <label>
+          WS URL
+          <input id="wsUrl" />
+        </label>
+        <button id="connectBtn">Connect</button>
+        <button id="disconnectBtn" disabled>Disconnect</button>
+      </div>
+
+      <div class="row">
+        <label>
+          Send
+          <input id="text" placeholder="type a message (relayed as {type:'chat', text})" />
+        </label>
+        <button id="sendBtn" disabled>Send</button>
+        <button id="pingBtn" disabled>Ping</button>
+        <span style="opacity:.8">Tip: try different rooms via `/ws/<roomId>`.</span>
+      </div>
+
+      <pre id="log"></pre>
+    </main>
+
+    <script type="module">
+      import { encode, decode } from "https://esm.sh/@msgpack/msgpack@3.1.3";
+
+      const $ = (id) => document.getElementById(id);
+      const logEl = $("log");
+      const statusEl = $("status");
+      const meEl = $("me");
+      const roomEl = $("room");
+      const wsUrlInput = $("wsUrl");
+      const textInput = $("text");
+      const connectBtn = $("connectBtn");
+      const disconnectBtn = $("disconnectBtn");
+      const sendBtn = $("sendBtn");
+      const pingBtn = $("pingBtn");
+
+      const DEFAULT_URL = "ws://localhost:8080/ws/lobby";
+      wsUrlInput.value = new URLSearchParams(location.search).get("ws") ?? DEFAULT_URL;
+
+      let ws = null;
+      let myId = null;
+
+      function setStatus(s) {
+        statusEl.textContent = s;
+      }
+
+      function append(line, obj) {
+        const ts = new Date().toISOString().slice(11, 19);
+        logEl.textContent += `[${ts}] ${line}` + (obj ? ` ${JSON.stringify(obj)}` : "") + "\n";
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function setUiConnected(connected) {
+        connectBtn.disabled = connected;
+        disconnectBtn.disabled = !connected;
+        sendBtn.disabled = !connected;
+        pingBtn.disabled = !connected;
+      }
+
+      function parseRoom(wsUrl) {
+        try {
+          const u = new URL(wsUrl);
+          const parts = u.pathname.split("/").filter(Boolean);
+          // expect /ws/:roomId
+          return parts[1] ?? "lobby";
+        } catch {
+          return "-";
+        }
+      }
+
+      function sendMsg(obj) {
+        if (!ws || ws.readyState !== WebSocket.OPEN) return;
+        ws.send(encode(obj));
+      }
+
+      connectBtn.onclick = () => {
+        const wsUrl = wsUrlInput.value.trim();
+        if (!wsUrl) return;
+
+        myId = null;
+        meEl.textContent = "me: -";
+        roomEl.textContent = `room: ${parseRoom(wsUrl)}`;
+
+        append("connecting →", { ws: wsUrl });
+        setStatus("connecting");
+
+        ws = new WebSocket(wsUrl);
+        ws.binaryType = "arraybuffer";
+
+        ws.onopen = () => {
+          setStatus("connected");
+          setUiConnected(true);
+          append("open");
+          // optional hello (protocol version check)
+          sendMsg({ type: "hello", protocolVersion: 1 });
+        };
+
+        ws.onmessage = (event) => {
+          const msg = decode(new Uint8Array(event.data));
+          append("recv ←", msg);
+
+          if (msg?.type === "welcome") {
+            myId = msg.playerId;
+            meEl.textContent = `me: ${myId.slice(0, 8)}`;
+          }
+        };
+
+        ws.onclose = (ev) => {
+          append("close", { code: ev.code, reason: ev.reason });
+          setStatus("disconnected");
+          setUiConnected(false);
+          ws = null;
+          myId = null;
+          meEl.textContent = "me: -";
+        };
+
+        ws.onerror = () => {
+          append("error (see devtools console)");
+        };
+      };
+
+      disconnectBtn.onclick = () => {
+        if (ws) ws.close();
+      };
+
+      sendBtn.onclick = () => {
+        const text = textInput.value.trim();
+        if (!text) return;
+        sendMsg({ type: "chat", text, at: Date.now() });
+        textInput.value = "";
+      };
+
+      pingBtn.onclick = () => {
+        const nonce = `n_${Math.random().toString(16).slice(2)}_${Date.now().toString(16)}`;
+        sendMsg({ type: "ping", nonce });
+      };
+
+      textInput.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") sendBtn.click();
+      });
+
+      setUiConnected(false);
+    </script>
+  </body>
+</html>
